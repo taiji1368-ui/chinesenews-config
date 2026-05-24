@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "updatedAt": "2026-05-25",
+  "emergencyFallbackEnabled": true,
+  "voa": {
+    "linkSubstring": "/a/",
+    "categoryURLs": [
+      "https://www.voachinese.com/",
+      "https://www.voachinese.com/z/1755",
+      "https://www.voachinese.com/z/3623",
+      "https://www.voachinese.com/z/1761",
+      "https://www.voachinese.com/z/3624",
+      "https://www.voachinese.com/z/1762",
+      "https://www.voachinese.com/z/1735"
+    ],
+    "containerPatterns": [
+      "<div[^>]*class\\s*=\\s*\"[^\"]*wsw[^\"]*\"[^>]*>",
+      "<div[^>]*class\\s*=\\s*\"[^\"]*article__body[^\"]*\"[^>]*>"
+    ]
+  },
+  "wikinews": {
+    "categoryTitle": "Category:已发布"
+  }
+}
