@@ -16,19 +16,32 @@ jobs:
   generate:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      # main = the generator script (single source of truth).
+      - name: Checkout main (script)
+        uses: actions/checkout@v4
         with:
+          ref: main
+          path: src
+      # feed = the published artifacts (daily-news.json + seen.json history).
+      - name: Checkout feed (artifacts)
+        uses: actions/checkout@v4
+        with:
+          ref: feed
+          path: feed
           fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Publish today's feed to the 'feed' branch
+      - name: Generate today's feed and publish to the 'feed' branch
         run: |
           set -e
+          cd feed
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git checkout feed 2>/dev/null || git checkout -b feed
-          python generate_daily_news.py --out daily-news.json --target 20
-          git add daily-news.json
+          # Seed the cross-day dedup history on the very first run.
+          [ -f seen.json ] || echo '{}' > seen.json
+          # Run MAIN's script (not feed's) so the generator is always current.
+          python ../src/generate_daily_news.py --out daily-news.json --target 20 --seen seen.json
+          git add daily-news.json seen.json
           git commit -m "chore: daily news $(date -u +%F)" || { echo "no change"; exit 0; }
           git push origin feed
