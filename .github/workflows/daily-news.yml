@@ -16,19 +16,31 @@ jobs:
   generate:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      # main = the generator script (single source of truth).
+      - name: Checkout main (script)
+        uses: actions/checkout@v4
         with:
+          ref: main
+          path: src
+      # feed = the published rolling window (daily-news.json).
+      - name: Checkout feed (artifacts)
+        uses: actions/checkout@v4
+        with:
+          ref: feed
+          path: feed
           fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Publish today's feed to the 'feed' branch
+      - name: Generate today's rolling feed and publish to 'feed'
         run: |
           set -e
+          cd feed
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git checkout feed 2>/dev/null || git checkout -b feed
-          python generate_daily_news.py --out daily-news.json --target 20
+          # Run MAIN's script (not feed's stale copy) so the generator is always
+          # current. It reads the existing daily-news.json as rolling carryover.
+          python ../src/generate_daily_news.py --out daily-news.json --target 30 --cap 50
           git add daily-news.json
           git commit -m "chore: daily news $(date -u +%F)" || { echo "no change"; exit 0; }
           git push origin feed
