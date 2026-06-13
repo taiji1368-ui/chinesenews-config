@@ -563,13 +563,21 @@ def build_feed(fresh_target, rolling_cap, prev_articles):
     for a in fresh:
         a.setdefault("publishedDate", today)
 
+    # Carryover from the PREVIOUS feed must pass the SAME digest + neutrality gates
+    # the fresh batch did. Older curator versions (or expanded marker lists) may have
+    # published items that shouldn't ride the rolling window forever, so re-check them
+    # here instead of trusting that whatever was published before is still acceptable.
+    carry = [a for a in (prev_articles or [])
+             if not is_digest(a.get("title", ""))
+             and is_neutral(a.get("title", ""), a.get("content", ""))]
+
     # ROLLING WINDOW: today's fresh articles on top, then carry over the most-recent
-    # items from the PREVIOUS feed (deduped by link+title), capped at rolling_cap.
-    # The oldest fall off the tail. This keeps the published feed at ~rolling_cap so
-    # a fresh install shows a full list immediately, while genuinely-new articles
-    # always sit at the top. The window fills to the cap over a few daily runs.
+    # (re-filtered) items from the previous feed (deduped by link+title), capped at
+    # rolling_cap. The oldest fall off the tail. This keeps the published feed at
+    # ~rolling_cap so a fresh install shows a full list immediately, while genuinely-
+    # new articles always sit at the top. The window fills to the cap over a few runs.
     out, seen_l, seen_t = [], set(), set()
-    for a in fresh + (prev_articles or []):
+    for a in fresh + carry:
         if len(out) >= rolling_cap:
             break
         link, title = a.get("link"), a.get("title")
