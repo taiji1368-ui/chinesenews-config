@@ -3,14 +3,14 @@
 Generate `daily-news.json` (Tier 0 curated feed) for the Chinese News app.
 
 This mirrors the on-device curation in the iOS/Android apps' NewsArticleParser:
-scrape VOA 中文 (public domain, NEUTRAL sections only) + 联合国新闻 (UN News,
-reproducible) + 维基新闻 (CC BY 2.5), pull each article body, STRIP THE FOOTER/NOISE,
-keep 150..1500-hanzi articles, and DROP anything political (is_neutral keyword
-filter) so the learner feed stays apolitical. Today's fresh articles sit on top of
-a ROLLING window (carried over from the previous feed, deduped, capped at --cap) so
-a fresh install sees a full ~50-article list. All sources are copyright-safe
-(public-domain / reproducible / CC) and stored as inline full text. Run daily from
-GitHub Actions and commit to the `feed` branch — apps read it first (Tier 0).
+scrape VOA 中文 (public domain) + 联合国新闻 (UN News, reproducible) + 维基新闻
+(CC BY 2.5), pull each article body, STRIP THE FOOTER/NOISE, keep 150..1500-hanzi
+articles. The feed is a NORMAL news feed (politics included); the only content
+block is 台独 / 法轮功 (is_allowed). Today's fresh articles sit on top of a ROLLING
+window (carried over from the previous feed, deduped, capped at --cap) so a fresh
+install sees a full ~50-article list. All sources are copyright-safe (public-domain
+/ reproducible / CC) and stored as inline full text. Run daily from GitHub Actions
+and commit to the `feed` branch — apps read it first (Tier 0).
 
 Stdlib only (urllib/re/json/html/gzip) so the GitHub Action needs no `pip install`.
 
@@ -35,14 +35,21 @@ TIMEOUT = 20
 MIN_HANZI = 150
 MAX_HANZI = 1500
 
-# VOA category landing pages — NEUTRAL sections ONLY (sci/tech/culture/health +
-# economy/finance). Political sections (焦点/印太/全球议题/中东/中国/美国/国际/
-# 时事大家谈) are deliberately excluded so the learner feed stays apolitical; the
-# is_neutral keyword filter then drops anything political that still slips in.
+# VOA category landing pages — the FULL set (general news, NOT restricted to
+# neutral sections). PRODUCT DECISION: the realtime feed is a normal news feed
+# (politics included); only 台独 / 法轮功 are blocked downstream (see is_allowed).
 VOA_SOURCES = [
-    "https://www.voachinese.com/z/5679",  # 科教·文娱·体健 (sci/edu/culture/sport/health)
-    "https://www.voachinese.com/z/1748",  # 经济·金融·贸易 (economy/finance/trade)
-    "https://www.voachinese.com/z/1762",  # 经济 (legacy economy)
+    "https://www.voachinese.com/",        # homepage — broadest surface
+    "https://www.voachinese.com/z/1755",  # 焦点
+    "https://www.voachinese.com/z/1745",  # 印太
+    "https://www.voachinese.com/z/1748",  # 经济·金融·贸易
+    "https://www.voachinese.com/z/5374",  # 全球议题
+    "https://www.voachinese.com/z/1759",  # 中东
+    "https://www.voachinese.com/z/5679",  # 科教·文娱·体健
+    "https://www.voachinese.com/z/3623",  # 中国 (legacy)
+    "https://www.voachinese.com/z/1761",  # 国际 (legacy)
+    "https://www.voachinese.com/z/3624",  # 美国 (legacy)
+    "https://www.voachinese.com/z/1762",  # 经济 (legacy)
 ]
 
 # Every published article body is truncated to this many CJK chars (at a line
@@ -50,36 +57,26 @@ VOA_SOURCES = [
 # window used to QUALIFY the article.
 DISPLAY_MAX_HANZI = 1200
 
-# Neutrality filter — keep the feed tech/econ/sci/culture/health, drop overtly
-# political or sensitive items. Matched against the TITLE + a short body prefix
-# (where political framing lives); conservative so factual market/tech stories
-# survive (plain 关税/贸易 are NOT blocked, only their war framings).
-_POLITICAL_MARKERS = (
-    # leaders / government / elections
-    "习近平", "李强", "拜登", "特朗普", "川普", "白宫", "国务院", "总统", "总理",
-    "国会", "众议院", "参议院", "大选", "选举", "投票", "议员", "外交部", "政府声明",
-    # geopolitics / conflict / coercion
-    "战争", "战火", "军事", "导弹", "核武", "武器", "军队", "开战", "停火", "冲突",
-    "制裁", "贸易战", "脱钩", "关税战", "抗议", "示威", "镇压", "政变",
-    # geopolitics / policy / coercion (US–China tech war, Taiwan, alliances)
-    "出口管制", "出口禁令", "芯片出口", "禁止向", "在台协会", "美台", "国防部",
-    "五角大楼", "北约", "国务卿", "大使馆", "地缘政治", "自由被",
-    # sensitive topics
-    "台独", "港独", "新疆", "西藏", "维吾尔", "人权", "民主运动", "独裁",
-    "间谍", "异见", "审查", "六四", "法轮",
+# Block list — PRODUCT DECISION: the feed is otherwise UNFILTERED (normal news,
+# politics included). We block ONLY articles touching 台独 (Taiwan independence) or
+# 法轮功 (Falun Gong), thoroughly, over the FULL body. A regex with [简/繁] character
+# classes covers simplified / traditional / mixed forms (台/臺, 独/獨, 湾/灣, 轮/輪).
+_BLOCK_RE = re.compile(
+    r"[台臺][独獨]"            # 台独 / 台獨 / 臺独 / 臺獨
+    r"|[台臺][湾灣][独獨]立"    # 台湾独立 full phrase (all simp/trad mixes)
+    r"|法[轮輪]"               # 法轮功 / 法轮大法 / 法轮 (FG org + practice)
 )
 
 
-def is_neutral(title, body=""):
-    """True when the item looks apolitical (safe for the learner feed)."""
-    hay = (title or "") + " " + (body or "")[:200]
-    return not any(m in hay for m in _POLITICAL_MARKERS)
+def is_allowed(title, body=""):
+    """False only when the item touches 台独 / 法轮功 (checked over the FULL text)."""
+    return _BLOCK_RE.search((title or "") + " " + (body or "")) is None
 
 
 # Headline-roundup / broadcast digests — lists of mixed headlines, not a readable
-# article, and they can smuggle political headlines past the title-only checks.
+# article. Dropped for READING QUALITY only (independent of the block list above).
 _DIGEST_MARKERS = ("报纸头条", "報紙頭條", "中文报纸头条", "子午播报", "播报",
-                   "中文广播", "美国之音中文广播", "新闻简报", "时事大家谈")
+                   "中文广播", "美国之音中文广播", "新闻简报")
 
 
 def is_digest(title):
@@ -312,7 +309,7 @@ def voa_article(cand, lo, hi):
     hanzi = count_cjk(body)
     if hanzi < lo or hanzi > hi:
         return None
-    if is_digest(cand["title"]) or not is_neutral(cand["title"], body):
+    if is_digest(cand["title"]) or not is_allowed(cand["title"], body):
         return None
     body = truncate_hanzi(body, DISPLAY_MAX_HANZI)
     return {
@@ -379,7 +376,7 @@ def wikinews_articles(target, lo, hi):
             hanzi = count_cjk(body)
             if hanzi < lo or hanzi > hi:
                 continue
-            if is_digest(title) or not is_neutral(title, body):
+            if is_digest(title) or not is_allowed(title, body):
                 continue
             body = truncate_hanzi(body, DISPLAY_MAX_HANZI)
             link = p.get("fullurl") or f"https://zh.wikinews.org/?curid={p.get('pageid','')}"
@@ -390,16 +387,15 @@ def wikinews_articles(target, lo, hi):
 
 # ----------------------- UN News (RSS + topic pages) ------------------------
 # 联合国新闻 (news.un.org) — UN content, freely reproducible with attribution,
-# neutral by nature (world / economy / health / climate / culture). Full text
+# covering world / economy / health / climate / culture / politics. Full text
 # stored inline (same as VOA/维基), so the apps render it without on-device scraping.
-# We pull the all-news RSS PLUS several NEUTRAL topic landing pages to widen the
-# pool. The political topics (peace-and-security / human-rights / humanitarian-aid /
-# migrants-and-refugees / law-and-crime-prevention) are deliberately excluded; the
-# is_neutral keyword filter is the safety net for anything political that slips in.
-
+# We pull the all-news RSS PLUS the topic landing pages to widen the pool. All
+# topics are included (the feed is a normal news feed; only 台独 / 法轮功 are blocked).
 UNNEWS_RSS = "https://news.un.org/feed/subscribe/zh/news/all/rss.xml"
 UNNEWS_TOPICS = ["economic-development", "climate-change", "culture-and-education",
-                 "health", "sdgs"]
+                 "health", "sdgs", "peace-and-security", "human-rights",
+                 "humanitarian-aid", "migrants-and-refugees",
+                 "law-and-crime-prevention", "un-affairs", "women"]
 UNNEWS_ALLOWED_HOSTS = {"news.un.org"}
 
 _RSS_ITEM_RE = re.compile(r"<item\b[^>]*>(.*?)</item>", re.IGNORECASE | re.DOTALL)
@@ -481,7 +477,7 @@ def unnews_article(cand, lo, hi):
     hanzi = count_cjk(body)
     if hanzi < lo or hanzi > hi:
         return None
-    if is_digest(title) or not is_neutral(title, body):
+    if is_digest(title) or not is_allowed(title, body):
         return None
     body = truncate_hanzi(body, DISPLAY_MAX_HANZI)
     # Normalize the feed/view redirect to the canonical story URL for "view original".
@@ -563,13 +559,13 @@ def build_feed(fresh_target, rolling_cap, prev_articles):
     for a in fresh:
         a.setdefault("publishedDate", today)
 
-    # Carryover from the PREVIOUS feed must pass the SAME digest + neutrality gates
+    # Carryover from the PREVIOUS feed must pass the SAME digest + block-list gates
     # the fresh batch did. Older curator versions (or expanded marker lists) may have
     # published items that shouldn't ride the rolling window forever, so re-check them
     # here instead of trusting that whatever was published before is still acceptable.
     carry = [a for a in (prev_articles or [])
              if not is_digest(a.get("title", ""))
-             and is_neutral(a.get("title", ""), a.get("content", ""))]
+             and is_allowed(a.get("title", ""), a.get("content", ""))]
 
     # ROLLING WINDOW: today's fresh articles on top, then carry over the most-recent
     # (re-filtered) items from the previous feed (deduped by link+title), capped at
