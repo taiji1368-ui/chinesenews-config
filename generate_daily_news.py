@@ -76,6 +76,16 @@ def is_neutral(title, body=""):
     return not any(m in hay for m in _POLITICAL_MARKERS)
 
 
+# Headline-roundup / broadcast digests — lists of mixed headlines, not a readable
+# article, and they can smuggle political headlines past the title-only checks.
+_DIGEST_MARKERS = ("报纸头条", "報紙頭條", "中文报纸头条", "子午播报", "播报",
+                   "中文广播", "美国之音中文广播", "新闻简报", "时事大家谈")
+
+
+def is_digest(title):
+    return any(m in (title or "") for m in _DIGEST_MARKERS)
+
+
 def truncate_hanzi(text, max_hanzi):
     """Trim body to ~max_hanzi CJK chars at a line boundary (keep whole lines)."""
     if not text or count_cjk(text) <= max_hanzi:
@@ -302,7 +312,7 @@ def voa_article(cand, lo, hi):
     hanzi = count_cjk(body)
     if hanzi < lo or hanzi > hi:
         return None
-    if not is_neutral(cand["title"], body):
+    if is_digest(cand["title"]) or not is_neutral(cand["title"], body):
         return None
     body = truncate_hanzi(body, DISPLAY_MAX_HANZI)
     return {
@@ -369,7 +379,7 @@ def wikinews_articles(target, lo, hi):
             hanzi = count_cjk(body)
             if hanzi < lo or hanzi > hi:
                 continue
-            if not is_neutral(title, body):
+            if is_digest(title) or not is_neutral(title, body):
                 continue
             body = truncate_hanzi(body, DISPLAY_MAX_HANZI)
             link = p.get("fullurl") or f"https://zh.wikinews.org/?curid={p.get('pageid','')}"
@@ -378,17 +388,26 @@ def wikinews_articles(target, lo, hi):
     return out
 
 
-# --------------------------- UN News via RSS --------------------------------
+# ----------------------- UN News (RSS + topic pages) ------------------------
 # 联合国新闻 (news.un.org) — UN content, freely reproducible with attribution,
-# neutral by nature (world / economy / health / humanitarian). Full text stored
-# inline (same as VOA/维基), so the apps render it without on-device scraping.
+# neutral by nature (world / economy / health / climate / culture). Full text
+# stored inline (same as VOA/维基), so the apps render it without on-device scraping.
+# We pull the all-news RSS PLUS several NEUTRAL topic landing pages to widen the
+# pool. The political topics (peace-and-security / human-rights / humanitarian-aid /
+# migrants-and-refugees / law-and-crime-prevention) are deliberately excluded; the
+# is_neutral keyword filter is the safety net for anything political that slips in.
 
 UNNEWS_RSS = "https://news.un.org/feed/subscribe/zh/news/all/rss.xml"
+UNNEWS_TOPICS = ["economic-development", "climate-change", "culture-and-education",
+                 "health", "sdgs"]
 UNNEWS_ALLOWED_HOSTS = {"news.un.org"}
 
 _RSS_ITEM_RE = re.compile(r"<item\b[^>]*>(.*?)</item>", re.IGNORECASE | re.DOTALL)
 _RSS_LINK_RE = re.compile(r"<link>(.*?)</link>", re.IGNORECASE | re.DOTALL)
 _RSS_TITLE_RE = re.compile(r"<title>(.*?)</title>", re.IGNORECASE | re.DOTALL)
+_UN_STORY_RE = re.compile(r"/zh/story/\d{4}/\d{2}/\d+")
+_OG_TITLE_RE = re.compile(r'<meta[^>]+property=["\']og:title["\'][^>]+content=["\']([^"\']+)["\']', re.IGNORECASE)
+_H1_RE = re.compile(r"<h1[^>]*>(.*?)</h1>", re.IGNORECASE | re.DOTALL)
 
 
 def _clean_cdata(s):
@@ -411,25 +430,68 @@ def rss_items(xml):
     return items
 
 
+def _unnews_title(html_text):
+    """Resolve a UN story title from og:title (clean) → h1, for topic-page links."""
+    m = _OG_TITLE_RE.search(html_text or "")
+    if m:
+        return decode_entities(strip_tags(m.group(1))).strip()
+    m = _H1_RE.search(html_text or "")
+    if m:
+        return re.sub(r"\s+", " ", decode_entities(strip_tags(m.group(1)))).strip()
+    return ""
+
+
+def unnews_candidates(cap):
+    """UN story candidates: the all-news RSS (titled) + neutral topic pages
+    (links only; titles resolved per-article). Deduped by canonical /zh/story/ link."""
+    seen, out = set(), []
+    for it in rss_items(fetch(UNNEWS_RSS)):
+        link = it["link"].replace("/feed/view/zh/", "/zh/")
+        if link in seen:
+            continue
+        seen.add(link)
+        out.append({"title": it["title"], "link": link})
+        if len(out) >= cap:
+            return out
+    for topic in UNNEWS_TOPICS:
+        if len(out) >= cap:
+            break
+        page = fetch(f"https://news.un.org/zh/news/topic/{topic}")
+        if not page:
+            continue
+        for path in dict.fromkeys(_UN_STORY_RE.findall(page)):   # ordered dedup
+            link = "https://news.un.org" + path
+            if link in seen:
+                continue
+            seen.add(link)
+            out.append({"title": "", "link": link})
+            if len(out) >= cap:
+                break
+    return out
+
+
 def unnews_article(cand, lo, hi):
     html = fetch(cand["link"])
     if not html:
+        return None
+    title = cand["title"] or _unnews_title(html)
+    if not title or not contains_cjk(title):
         return None
     body = sanitize_article_text(extract_main_text(html))
     hanzi = count_cjk(body)
     if hanzi < lo or hanzi > hi:
         return None
-    if not is_neutral(cand["title"], body):
+    if is_digest(title) or not is_neutral(title, body):
         return None
     body = truncate_hanzi(body, DISPLAY_MAX_HANZI)
     # Normalize the feed/view redirect to the canonical story URL for "view original".
     link = cand["link"].replace("/feed/view/zh/", "/zh/")
-    return {"title": cand["title"], "link": link, "source": "unnews",
+    return {"title": title, "link": link, "source": "unnews",
             "content": body, "hanziCount": count_cjk(body)}
 
 
 def unnews_articles(target, lo, hi):
-    cands = rss_items(fetch(UNNEWS_RSS))[: max(target, 10) * 2]
+    cands = unnews_candidates(max(target, 15) * 3)
     out = []
     with cf.ThreadPoolExecutor(max_workers=8) as ex:
         futs = [ex.submit(unnews_article, c, lo, hi) for c in cands]
