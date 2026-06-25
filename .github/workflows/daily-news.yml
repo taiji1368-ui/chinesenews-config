@@ -40,7 +40,7 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           # Run MAIN's script (not feed's stale copy) so the generator is always
           # current. It reads the existing daily-news.json as rolling carryover.
-          python ../src/generate_daily_news.py --out daily-news.json --target 30 --cap 50
+          python ../src/generate_daily_news.py --out daily-news.json --target 30 --cap 100
           git add daily-news.json
           git commit -m "chore: daily news $(date -u +%F)" || { echo "no change"; exit 0; }
           git push origin feed
